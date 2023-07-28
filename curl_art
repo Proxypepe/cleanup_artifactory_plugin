@@ -1,0 +1,13 @@
+#!/bin/bash
+
+
+curl -u alex:Password1 "http://localhost:8082/artifactory/api/plugins"
+echo "\n"
+curl -XPOST http://alex:Password1@localhost:8082/artifactory/api/plugins/reload
+
+curl -u alex:Password1 "http://localhost:8082/artifactory/api/plugins"
+
+# #curl -u alex:Password1 -XPOST "http://localhost:8082/artifactor:/api/plugins/execute" -H "Content-Type: application/json" -d '{ "repo": "my-repo", "interval": 60, "dryRun": true }'
+
+
+curl -XPOST "http://alex:Password1@localhost:8082/artifactory/api/plugins/execute/rotateRegular" -T properties.json
