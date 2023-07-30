@@ -1,18 +1,19 @@
 /* groovylint-disable LineLength, UnnecessaryGetter */
 import groovy.json.JsonSlurper
+import org.artifactory.exception.CancelException
 import org.artifactory.fs.ItemInfo
 import org.artifactory.repo.RepoPath
 import org.artifactory.repo.RepoPathFactory
 import org.artifactory.resource.ResourceStreamHandle
-import org.artifactory.repo.Repositories
 
 /**
- * Scans folders recursively.
+ * Сканирует репозиторий и его подпапки рекурсивно.
+ * Удаляет артефакты, которые были изменены более указанного интервала назад.
  *
- * @param dryRun -
- * @param folderItem -
- * @param interval -
- **/
+ * @param dryRun если true, то фактическое удаление не производится, только ведется логирование
+ * @param artifact артефакт для сканирования
+ * @param interval интервал в миллисекундах, артефакты старше этого интервала подлежат удалению
+ */
 void scanRepositoryContentArtifact(Boolean dryRun, ItemInfo artifact, long interval) {
     RepoPath fullArtifactRepo = RepoPathFactory.create(artifact.getRepoKey(), artifact.getRelPath())
     if (artifact.isFolder()) {
@@ -32,6 +33,14 @@ void scanRepositoryContentArtifact(Boolean dryRun, ItemInfo artifact, long inter
     }
 }
 
+/**
+ * Функция ротации обычных репозиториев. Итерирует локальные репозитории,
+ * игнорирует репозитории, перечисленные в списке 'exclude'.
+ *
+ * @param dryRun если true, то фактическое удаление не производится, только ведется логирование
+ * @param regularInterval интервал в днях, артефакты старше этого интервала подлежат удалению
+ * @param exclude список ключей репозиториев, которые исключаются из вращения
+ */
 void rotateRegular(Boolean dryRun, int regularInterval, List<String> exclude) {
     log.debug("In func $dryRun")
     log.debug("In func $regularInterval")
@@ -53,6 +62,17 @@ void rotateRegular(Boolean dryRun, int regularInterval, List<String> exclude) {
     }
 }
 
+/**
+ * Рекурсивно сканирует содержимое артефакта в репозитории. Если артефакт является папкой,
+ * функция рекурсивно вызывается для каждого дочернего элемента. Если артефакт является файлом,
+ * применяется валидатор для проверки его состояния. Если валидация проходит успешно,
+ * выполняется действие, определенное в режиме исполнения.
+ *
+ * @param artifact объект ItemInfo, представляющий артефакт для сканирования.
+ * @param executionMode объект ExecutionMode, определяющий действие, которое следует выполнить с артефактом,
+ *                      в случае прохождения валидации.
+ * @param validator объект Validator, используемый для валидации артефакта.
+ * */
 void scanRepositoryContentArtifact(ItemInfo artifact, ExecutionMode executionMode, Validator validator) {
     RepoPath fullArtifactRepo = RepoPathFactory.create(artifact.getRepoKey(), artifact.getRelPath())
     if (artifact.isFolder()) {
@@ -66,6 +86,16 @@ void scanRepositoryContentArtifact(ItemInfo artifact, ExecutionMode executionMod
     }
 }
 
+/**
+ * Обходит все локальные репозитории, исключая те, что указаны в списке исключений.
+ * Для каждого артефакта в репозитории вызывается функция сканирования содержимого с переданными
+ * режимом исполнения и валидатором.
+ *
+ * @param executionMode объект ExecutionMode, определяющий действие, которое следует выполнить с артефактом,
+ *                      в случае прохождения валидации.
+ * @param validator объект Validator, используемый для валидации артефакта.
+ * @param exclude список имен репозиториев, которые следует исключить из обхода.
+ * */
 void rotateRegular(ExecutionMode executionMode, Validator validator, List<String> exclude) {
     repositories.getLocalRepositories().each { repoKey ->
         if (exclude.contains(repoKey)) {
@@ -108,47 +138,73 @@ executions {
 
     rotateRegular(
             version: '1',
-            description:'description',
+            description: 'description',
             httpMethod: 'POST',
-            users:[],
-            groups:[],
-            params:[:]) { params, ResourceStreamHandle body ->
+            users: [],
+            groups: [],
+            params: [:]) { params, ResourceStreamHandle body ->
         log.debug('Start')
         assert body
-
         def json = new JsonSlurper().parse(new InputStreamReader(body.inputStream))
         log.debug("$json.dryRun")
         log.debug("$json.interval")
         log.debug("$json.exclude")
+
         executionMode = createExecutionMode(json.dryRun, ctx, log)
-        def validator = new LastModifiedDayIntervalValidator(json.interval, log, repositories)
-        log.info('Repos is: {}', repositories.getClass())
-        // rotateRegular(json.dryRun, json.interval, json.exclude)
+        validator = new LastModifiedDayIntervalValidator(json.interval, log, repositories)
+
         rotateRegular(executionMode, validator, json.exclude)
-    }
+            }
 }
-    
+
 abstract class ArtifactoryContext {
     def log
     def repositories
 }
 
-public interface Validator {
+/**
+ * Интерфейс, отвечающий за определение того, подлежит ли артефакт удалению
+ */
+interface Validator {
 
+    /**
+     * Метод валидации. Принимает RepoPath в качестве параметра и возвращает булевый результат
+     *
+     * @param repoPath путь к репозиторию артефакта для валидации
+     * @return true, если артефакт подлежит удалению, иначе false
+     */
     Boolean validate(RepoPath repoPath)
 
 }
 
-public interface ExecutionMode {
+/**
+ * Интерфейс, отвечающий за выполнение удаления артефакта
+ */
+interface ExecutionMode {
 
+    /**
+     * Метод выполнения. Принимает RepoPath в качестве параметра и выполняет удаление артефакта
+     *
+     * @param repoPath путь к репозиторию артефакта для удаления
+     */
     void execute(RepoPath repoPath)
 
 }
 
+/**
+ * Класс, отвечающий за валидацию артефактов на основе даты их последнего изменения
+ */
 class LastModifiedDayIntervalValidator extends ArtifactoryContext implements Validator {
 
     Long interval
 
+    /**
+     * Создаёт новый объект LastModifiedDayIntervalValidator.
+     *
+     * @param interval интервал в днях, который используется для валидации даты последнего изменения артефакта.
+     * @param log объект для логирования действий валидатора.
+     * @param repositories объект, предоставляющий доступ к репозиториям.
+     * */
     LastModifiedDayIntervalValidator(Long interval, log, repositories) {
         this.interval = interval
         this.log = log
@@ -164,8 +220,17 @@ class LastModifiedDayIntervalValidator extends ArtifactoryContext implements Val
 
 }
 
+/**
+ * Класс, отвечающий за режим "сухого прогона" удаления
+ */
 class DryExecutionMode extends ArtifactoryContext implements ExecutionMode {
 
+    /**
+     * Создаёт новый объект DryExecutionMode.
+     *
+     * @param repositories объект, предоставляющий доступ к репозиториям.
+     * @param log объект для логирования действий режима исполнения.
+     * */
     DryExecutionMode(repositories, log) {
         this.repositories = repositories
         this.log = log
@@ -177,8 +242,17 @@ class DryExecutionMode extends ArtifactoryContext implements ExecutionMode {
 
 }
 
+/**
+ * Класс, отвечающий за режим фактического удаления
+ */
 class DeleteExecutionMode extends ArtifactoryContext implements ExecutionMode {
 
+    /**
+     * Создаёт новый объект DeleteExecutionMode.
+     *
+     * @param repositories объект, предоставляющий доступ к репозиториям.
+     * @param log объект для логирования действий режима исполнения.
+     * */
     DeleteExecutionMode(repositories, log) {
         this.repositories = repositories
         this.log = log
@@ -191,6 +265,6 @@ class DeleteExecutionMode extends ArtifactoryContext implements ExecutionMode {
 
 }
 
-public static ExecutionMode createExecutionMode(Boolean isDryMode, def repositories, def log) {
+static ExecutionMode createExecutionMode(Boolean isDryMode, def repositories, def log) {
     return isDryMode ? new DryExecutionMode(repositories, log) : new DeleteExecutionMode(repositories, log)
 }
