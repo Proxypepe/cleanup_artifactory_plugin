@@ -1,6 +1,5 @@
 /* groovylint-disable LineLength, UnnecessaryGetter */
 
-import groovy.json.JsonBuilder
 import groovy.json.JsonSlurper
 import org.artifactory.exception.CancelException
 import org.artifactory.fs.ItemInfo
@@ -48,12 +47,28 @@ void scanRepositoryContentArtifact(ItemInfo artifact, ExecutionMode executionMod
  * @param validator объект Validator, используемый для валидации артефакта.
  * @param exclude список имен репозиториев, которые следует исключить из обхода.
  * */
-void rotateRegularFunc(ExecutionMode executionMode, Validator validator, List<String> exclude) {
-    repositories.getLocalRepositories().each { repoKey ->
-        if (exclude.contains(repoKey)) {
-            log.info("Пропускаем репозиторий: $repoKey")
-            return
+void rotateRegularExclude(ExecutionMode executionMode, Validator validator, List<String> exclude) {
+    try {
+        repositories.getLocalRepositories().each { repoKey ->
+            if (exclude.contains(repoKey)) {
+                log.info("Пропускаем репозиторий: $repoKey")
+                return
+            }
+            log.info("Обрабатываем репозиторий: $repoKey")
+            repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
+                scanRepositoryContentArtifact(item, executionMode, validator)
+            }
         }
+    } catch (Exception ex) {
+        log.info('ex to string {}', ex.toString())
+        log.info('ex get Messg {}', ex.getMessage())
+        log.info('ex stack trace {}', ex.getStackTrace())
+    }
+}
+
+
+void rotateRegularInclude(ExecutionMode executionMode, Validator validator, List<String> include) {
+    include.each {repoKey ->
         log.info("Обрабатываем репозиторий: $repoKey")
         repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
             scanRepositoryContentArtifact(item, executionMode, validator)
@@ -105,11 +120,65 @@ executions {
         executionMode = createExecutionMode(json.dryRun, repositories, log)
         validator = new LastModifiedDayIntervalValidator(json.interval, log, repositories)
 
-        rotateRegularFunc(executionMode, validator, json.exclude)
+        rotateRegularExclude(executionMode, validator, json.exclude)
     }
 }
 
+/**
+ * Чтение и анализ конфигурационного файла в формате JSON, расположенного по пути CONFIG_FILE_PATH.
+ * Конфигурационный файл содержит настройки политики по расписанию.
+ * При наличии файла происходит чтение его содержимого и последующий запуск заданий в соответствии с этими настройками.
+ * Если файла нет, задания не запускаются.
+ *
+ * В каждой политике могут быть указаны следующие параметры:
+ * - cron: cron-выражение для определения времени запуска задания. По умолчанию "0 0 5 ? * 1".
+ * - interval: интервал времени, за который должна проводиться чистка. По умолчанию задается DEFAULT_TIME_INTERVAL.
+ * - dryRun: если значение true, задание только логирует действия без их фактического выполнения. По умолчанию true.
+ * - exclude: список репозиториев, которые следует исключить из чистки. По умолчанию исключаются 'Library', 'build'.
+ */
 def configFile = new File(ctx.artifactoryHome.etcDir, CONFIG_FILE_PATH)
+
+
+private void validateConfigObject(Object json) {
+    String message = ''
+    if (!(json.cron instanceof String)) {
+        message = "cron must be a string"
+        log.error(message)
+        throw new IllegalArgumentException(message)
+    }
+
+    if (!(json.mode in ['exclude', 'include'])) {
+        message = "mode can only be 'exclude' or 'include'"
+        log.error(message)
+        throw new IllegalArgumentException(message)
+    }
+
+    if (!(json.validator in ['LastModified', 'LastDownloaded', 'lastmodified', 'lastdownloaded'])) {
+        message = "validator can only be 'LastModified' or 'LastDownloaded'"
+        log.error(message)
+        throw new IllegalArgumentException(message)
+    }
+
+    if (!(json.interval instanceof Integer)) {
+        message = "interval must be an integer"
+        log.error(message)
+        throw new IllegalArgumentException(message)
+    }
+
+    if (!(json.repos instanceof List)) {
+        message = "repos must be an List"
+        log.error(message)
+        throw new IllegalArgumentException(message)
+    }
+
+    if (!(json.dryRun instanceof Boolean)) {
+        message = "dryRun must be a boolean value"
+        log.error(message)
+        throw new IllegalArgumentException(message)
+    }
+
+    log.info("Configuration object passed validation")
+}
 
 if (configFile.exists()) {
     def config = new JsonSlurper().parse(configFile.toURL())
@@ -117,33 +186,40 @@ if (configFile.exists()) {
 
     def count = 1
     config.policies.each { policySettings ->
+        validateConfigObject(policySettings)
         def cron = policySettings.containsKey('cron') ? policySettings.cron as String : ["0 0 5 ? * 1"]
+        def mode = policySettings.containsKey('mode') ? policySettings.mode as String : "include"
+        def validatorType = policySettings.containsKey('validator') ? policySettings.validator as String : "LastModified"
         def interval = policySettings.containsKey('interval') ? policySettings.interval as Long : DEFAULT_TIME_INTERVAL
         def dryRun = policySettings.containsKey('dryRun') ? new Boolean(policySettings.dryRun) : true
-        def exclude = policySettings.containsKey('exclude') ? policySettings.exclude as List<String> : ['Library', 'build']
+        def repos = policySettings.containsKey('repos') ? policySettings.repos as List<String> : []
 
         jobs {
-            /**
-            * A job definition.
-            * The first value is a unique name for the job.
-            * Job runs are controlled by the provided interval or cron expression, which are mutually exclusive.
-            * The actual code to run as part of the job should be part of the job's closure.
-            *
-            * Parameters:
-            * cron (java.lang.String) - A valid cron expression used to schedule job runs
-            **/
             "scheduledCleanup_$count"(cron: cron) {
-                log.info "Policy settings for scheduled run at($cron): Skiped repos list($exclude), timeInterval($interval), exec ($dryRun)"
+                log.info "Policy settings for scheduled run at($cron): Skiped repos list($repos), timeInterval($interval), exec ($dryRun)"
                 executionMode = createExecutionMode(dryRun, repositories, log)
-                validator = new LastModifiedDayIntervalValidator(interval, log, repositories)
-
-                rotateRegularFunc(executionMode, validator, exclude)
+                validator = createValidator(validatorType, interval, log, repositories)
+                switch (mode) {
+                    case mode == 'include':
+                        rotateRegularInclude(executionMode, validator, repos)
+                        break
+                    case mode == 'exclude':
+                        rotateRegularExclude(executionMode, validator, repos)
+                        break
+                }
             }
         }
         count++
     }
 }
 
+/**
+ * Абстрактный класс ArtifactoryContext, представляющий контекст выполнения в Artifactory.
+ * Содержит ссылки на системные объекты, необходимые для выполнения операций с репозиториями.
+ *
+ * @param log объект для логирования действий и ошибок.
+ * @param repositories объект для взаимодействия с репозиториями в Artifactory.
+ */
 abstract class ArtifactoryContext {
     def log
     def repositories
@@ -225,13 +301,14 @@ class LastDownloadedIntervalValidator extends ArtifactoryContext implements Vali
     }
 
     Boolean validate(RepoPath artefactPath) {
-        long rotationIntervalMillis = interval * 24 * 60 * 60 * 1000
+        long rotationIntervalMillis = this.interval * 24 * 60 * 60 * 1000
         long cutoff = new Date().time - rotationIntervalMillis
         StatsInfo stats = repositories.getStats(artefactPath)
         return stats != null ? stats.getLastDownloaded() < cutoff : true
     }
 
 }
+
 
 /**
  * Класс, отвечающий за режим "сухого прогона" удаления
@@ -278,4 +355,16 @@ class DeleteExecutionMode extends ArtifactoryContext implements ExecutionMode {
 
 static ExecutionMode createExecutionMode(Boolean isDryMode, def repositories, def log) {
     return isDryMode ? new DryExecutionMode(repositories, log) : new DeleteExecutionMode(repositories, log)
+}
+
+static Validator createValidator(String validatorType, Long interval, def log, def repositories) {
+    switch (validatorType) {
+        case validatorType.toLowerCase() == 'lastmodified':
+            return new LastModifiedDayIntervalValidator(interval, log, repositories)
+        case validatorType.toLowerCase() == 'lastdownloaded':
+            return new LastModifiedDayIntervalValidator(interval, log, repositories)
+        default:
+            def errorMessage = "$validatorType Not valid value"
+            log.error(errorMessage)
+    }
 }
