@@ -1,1 +1,1 @@
-{ "dryRun": false, "interval": 30, "exclude": ["Library", "build"] }
+{ "dryRun": true, "interval": 1, "exclude": ["Library", "build"] }
