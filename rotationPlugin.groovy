@@ -51,28 +51,41 @@ void rotateRegularExclude(ExecutionMode executionMode, Validator validator, List
     try {
         repositories.getLocalRepositories().each { repoKey ->
             if (exclude.contains(repoKey)) {
-                log.info("Пропускаем репозиторий: $repoKey")
+                log.info("Skipped repositories: $repoKey")
                 return
             }
+            log.info("Processing the repository: $repoKey")
+            repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
+                scanRepositoryContentArtifact(item, executionMode, validator)
+            }
+        }
+    } catch (Exception ex) {
+        log.info('Error message {}', ex.getMessage())
+        log.info('Error stack trace {}', ex.getStackTrace())
+    }
+}
+
+/**
+ * Обходит репозитории, которые были переданы параметром.
+ * Для каждого артефакта в репозитории вызывается функция сканирования содержимого с переданными
+ * режимом исполнения и валидатором.
+ *
+ * @param executionMode объект ExecutionMode, определяющий действие, которое следует выполнить с артефактом,
+ *                      в случае прохождения валидации.
+ * @param validator объект Validator, используемый для валидации артефакта.
+ * @param exclude список имен репозиториев, которые следует исключить из обхода.
+ * */
+void rotateRegularInclude(ExecutionMode executionMode, Validator validator, List<String> include) {
+    try {
+        include.each { repoKey ->
             log.info("Обрабатываем репозиторий: $repoKey")
             repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
                 scanRepositoryContentArtifact(item, executionMode, validator)
             }
         }
     } catch (Exception ex) {
-        log.info('ex to string {}', ex.toString())
-        log.info('ex get Messg {}', ex.getMessage())
-        log.info('ex stack trace {}', ex.getStackTrace())
-    }
-}
-
-
-void rotateRegularInclude(ExecutionMode executionMode, Validator validator, List<String> include) {
-    include.each { repoKey ->
-        log.info("Обрабатываем репозиторий: $repoKey")
-        repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
-            scanRepositoryContentArtifact(item, executionMode, validator)
-        }
+        log.info('Error message {}', ex.getMessage())
+        log.info('Error stack trace {}', ex.getStackTrace())
     }
 }
 
@@ -124,19 +137,8 @@ executions {
     }
 }
 
-/**
- * Чтение и анализ конфигурационного файла в формате JSON, расположенного по пути CONFIG_FILE_PATH.
- * Конфигурационный файл содержит настройки политики по расписанию.
- * При наличии файла происходит чтение его содержимого и последующий запуск заданий в соответствии с этими настройками.
- * Если файла нет, задания не запускаются.
- *
- * В каждой политике могут быть указаны следующие параметры:
- * - cron: cron-выражение для определения времени запуска задания. По умолчанию "0 0 5 ? * 1".
- * - interval: интервал времени, за который должна проводиться чистка. По умолчанию задается DEFAULT_TIME_INTERVAL.
- * - dryRun: если значение true, задание только логирует действия без их фактического выполнения. По умолчанию true.
- * - exclude: список репозиториев, которые следует исключить из чистки. По умолчанию исключаются 'Library', 'build'.
- */
 def configFile = new File(ctx.artifactoryHome.etcDir, CONFIG_FILE_PATH)
+
 
 private void validateConfigObject(Object json) {
     String message = ''
@@ -151,7 +153,7 @@ private void validateConfigObject(Object json) {
         log.error(message)
         throw new IllegalArgumentException(message)
     }
-
+    // Список доступных валидаторов
     if (!(json.validator in ['LastModified', 'LastDownloaded', 'lastmodified', 'lastdownloaded'])) {
         message = "validator can only be 'LastModified' or 'LastDownloaded'"
         log.error(message)
@@ -198,7 +200,6 @@ if (configFile.exists()) {
                 log.info "Policy settings for scheduled run at($cron): Skiped repos list($repos), timeInterval($interval), exec ($dryRun)"
                 executionMode = createExecutionMode(dryRun, repositories, log)
                 validator = createValidator(validatorType, interval, repositories, log)
-                log.info('Valid obj {}', validator)
                 switch (mode) {
                     case 'include':
                         rotateRegularInclude(executionMode, validator, repos)
@@ -211,6 +212,8 @@ if (configFile.exists()) {
         }
         count++
     }
+} else {
+    log.info("You need to add a config file named ${this.class.name}.json")
 }
 
 /**
@@ -356,7 +359,7 @@ class DeleteExecutionMode extends ArtifactoryContext implements ExecutionMode {
  * Фабричный метод для создания объекта ExecutionMode. Создает объект
  * DryExecutionMode или DeleteExecutionMode в зависимости от параметра isDryMode.
  *
- * @param isDryMode Boolean значение, указывающее, следует ли использовать DryExecutionMode. 
+ * @param isDryMode Boolean значение, указывающее, следует ли использовать DryExecutionMode.
  * Если true, будет создан DryExecutionMode, в противном случае - DeleteExecutionMode.
  * @param repositories ссылка на объект repositories, содержащий информацию о репозиториях.
  * @param log ссылка на объект log, используемый для логирования действий.
@@ -370,8 +373,8 @@ static ExecutionMode createExecutionMode(Boolean isDryMode, def repositories, de
  * Фабричный метод для создания объекта Validator. Создает объект
  * LastModifiedDayIntervalValidator или LastDownloadedIntervalValidator в зависимости от параметра validatorType.
  *
- * @param validatorType String значение, указывающее тип валидатора. 
- * Может быть 'lastmodified' или 'lastdownloaded'. При любых других значениях, будет использоваться 
+ * @param validatorType String значение, указывающее тип валидатора.
+ * Может быть 'lastmodified' или 'lastdownloaded'. При любых других значениях, будет использоваться
  * LastModifiedDayIntervalValidator по умолчанию.
  * @param interval Long значение, указывающее интервал для валидатора.
  * @param repositories ссылка на объект repositories, содержащий информацию о репозиториях.
