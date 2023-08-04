@@ -364,16 +364,27 @@ class DeleteExecutionMode extends ArtifactoryContext implements ExecutionMode {
 
 }
 
+/**
+ * Интерфейс Comparator определяет единственный метод для сравнения двух длинных чисел.
+ **/
 interface Comparator {
     Boolean compare(Long first, Long second)
 }
 
+/**
+ * Класс InnerCompare реализует интерфейс Comparator. Метод compare возвращает true,
+ * если первое число больше второго.
+ **/
 class InnerCompare implements Comparator {
     Boolean compare(Long first, Long second) {
         return first > second
     }
 }
 
+/**
+ * Класс OuterCompare реализует интерфейс Comparator. Метод compare возвращает true,
+ * если первое число меньше второго.
+ **/
 class OuterCompare implements Comparator {
     Boolean compare(Long first, Long second) {
         return first < second
@@ -421,6 +432,16 @@ static Validator createValidator(String validatorType, Long interval, Comparator
     }
 }
 
+/**
+ * Фабричный метод для создания экземпляра Comparator.
+ * В зависимости от переданного типа (строки 'inner' или 'outer'), создаётся экземпляр 
+ * соответствующего класса. Если передан неизвестный тип, метод выводит сообщение об ошибке 
+ * и возвращает экземпляр класса InnerCompare по умолчанию.
+ *
+ * @param comparatorType строка, определяющая тип сравнивателя ('inner' или 'outer').
+ * @param log объект для логирования сообщений.
+ * @return экземпляр класса, реализующего интерфейс Comparator.
+ **/
 static Comparator createComparator(String comparatorType, def log) {
     switch (comparatorType) {
         case 'inner':
