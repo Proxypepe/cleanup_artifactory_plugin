@@ -166,6 +166,12 @@ private void validateConfigObject(Object json) {
         throw new IllegalArgumentException(message)
     }
 
+    if (!(json.intervalType in ['inner', 'outer'])) {
+        message = "Comparator can only be 'inner' or 'outer'"
+        log.error(message)
+        throw new IllegalArgumentException(message)
+    }
+
     if (!(json.repos instanceof List)) {
         message = "repos must be an List"
         log.error(message)
@@ -192,14 +198,16 @@ if (configFile.exists()) {
         def mode = policySettings.containsKey('mode') ? policySettings.mode as String : "include"
         def validatorType = policySettings.containsKey('validator') ? policySettings.validator as String : "LastModified"
         def interval = policySettings.containsKey('interval') ? policySettings.interval as Long : DEFAULT_TIME_INTERVAL
+        def intervalType = policySettings.containsKey('intervalType') ? policySettings.intervalType as String : "inner"
         def dryRun = policySettings.containsKey('dryRun') ? new Boolean(policySettings.dryRun) : true
         def repos = policySettings.containsKey('repos') ? policySettings.repos as List<String> : []
 
         jobs {
             "scheduledCleanup_$count"(cron: cron) {
                 log.info "Policy settings for scheduled run at($cron): Skiped repos list($repos), timeInterval($interval), exec ($dryRun)"
-                executionMode = createExecutionMode(dryRun, repositories, log)
-                validator = createValidator(validatorType, interval, repositories, log)
+                def executionMode = createExecutionMode(dryRun, repositories, log)
+                def comparator = createComparator(intervalType, log)
+                def validator = createValidator(validatorType, interval, comparator, repositories, log)
                 switch (mode) {
                     case 'include':
                         rotateRegularInclude(executionMode, validator, repos)
@@ -229,16 +237,18 @@ abstract class ArtifactoryContext {
 }
 
 /**
- * Интерфейс, отвечающий за определение того, подлежит ли артефакт удалению
+ * Абстрактный класс, отвечающий за определение того, подлежит ли артефакт удалению
  */
-interface Validator {
+abstract class Validator extends ArtifactoryContext {
+    Comparator comparator
+    Long interval
     /**
      * Метод валидации. Принимает RepoPath в качестве параметра и возвращает булевый результат
      *
      * @param artefactPath путь к репозиторию артефакта для валидации
      * @return true, если артефакт подлежит удалению, иначе false
      */
-    Boolean validate(RepoPath artefactPath)
+    abstract Boolean validate(RepoPath artefactPath)
 
 }
 
@@ -258,9 +268,8 @@ interface ExecutionMode {
 /**
  * Класс, отвечающий за валидацию артефактов на основе даты их последнего изменения
  */
-class LastModifiedDayIntervalValidator extends ArtifactoryContext implements Validator {
+class LastModifiedDayIntervalValidator extends Validator {
 
-    Long interval
     /**
      * Конструктор класса.
      *
@@ -268,17 +277,18 @@ class LastModifiedDayIntervalValidator extends ArtifactoryContext implements Val
      * @param log объект для логирования действий валидатора.
      * @param repositories объект, предоставляющий доступ к репозиториям.
      * */
-    LastModifiedDayIntervalValidator(Long interval, log, repositories) {
+    LastModifiedDayIntervalValidator(Long interval, Comparator comparator, log, repositories) {
         this.interval = interval
         this.log = log
         this.repositories = repositories
+        this.comparator = comparator
     }
 
     Boolean validate(RepoPath artefactPath) {
         Long rotationIntervalMillis = interval as Long * 24 * 60 * 60 * 1000
         long cutoff = new Date().time - rotationIntervalMillis
         ItemInfo item = repositories.getItemInfo(artefactPath)
-        return item.getLastModified() < cutoff
+        return comparator.compare(item.getLastModified(), cutoff)
     }
 
 }
@@ -286,9 +296,7 @@ class LastModifiedDayIntervalValidator extends ArtifactoryContext implements Val
 /**
  * Класс, отвечающий за валидацию артефактов на основе даты их последней загрузки
  */
-class LastDownloadedIntervalValidator extends ArtifactoryContext implements Validator {
-
-    Long interval
+class LastDownloadedIntervalValidator extends Validator {
 
     /**
      * Конструктор класса.
@@ -297,17 +305,18 @@ class LastDownloadedIntervalValidator extends ArtifactoryContext implements Vali
      * @param log объект для логирования действий валидатора.
      * @param repositories объект, предоставляющий доступ к репозиториям.
      */
-    LastDownloadedIntervalValidator(Long interval, log, repositories) {
+    LastDownloadedIntervalValidator(Long interval, Comparator comparator, log, repositories) {
         this.interval = interval
         this.log = log
         this.repositories = repositories
+        this.comparator = comparator
     }
 
     Boolean validate(RepoPath artefactPath) {
         long rotationIntervalMillis = this.interval * 24 * 60 * 60 * 1000
         long cutoff = new Date().time - rotationIntervalMillis
         StatsInfo stats = repositories.getStats(artefactPath)
-        return stats != null ? stats.getLastDownloaded() < cutoff : true
+        return stats != null ? comparator.compare(stats.getLastDownloaded(), cutoff) : true
     }
 
 }
@@ -355,6 +364,22 @@ class DeleteExecutionMode extends ArtifactoryContext implements ExecutionMode {
 
 }
 
+interface Comparator {
+    Boolean compare(Long first, Long second)
+}
+
+class InnerCompare implements Comparator {
+    Boolean compare(Long first, Long second) {
+        return first > second
+    }
+}
+
+class OuterCompare implements Comparator {
+    Boolean compare(Long first, Long second) {
+        return first < second
+    }
+}
+
 /**
  * Фабричный метод для создания объекта ExecutionMode. Создает объект
  * DryExecutionMode или DeleteExecutionMode в зависимости от параметра isDryMode.
@@ -381,17 +406,29 @@ static ExecutionMode createExecutionMode(Boolean isDryMode, def repositories, de
  * @param log ссылка на объект log, используемый для логирования действий.
  * @return возвращает новый объект Validator.
  */
-static Validator createValidator(String validatorType, Long interval, def repositories, def log) {
+static Validator createValidator(String validatorType, Long interval, Comparator comparator, def repositories, def log) {
     log.info("Validator Type: $validatorType")
     String lowerValidatorType = validatorType.toLowerCase()
     switch (lowerValidatorType) {
         case 'lastmodified':
-            return new LastModifiedDayIntervalValidator(interval, log, repositories)
+            return new LastModifiedDayIntervalValidator(interval, comparator, log, repositories)
         case 'lastdownloaded':
-            return new LastDownloadedIntervalValidator(interval, log, repositories)
+            return new LastDownloadedIntervalValidator(interval, comparator, log, repositories)
         default:
             def errorMessage = "$validatorType Not valid value, use default valitator"
             log.info(errorMessage)
-            return new LastModifiedDayIntervalValidator(interval, log, repositories)
+            return new LastModifiedDayIntervalValidator(interval, comparator, log, repositories)
+    }
+}
+
+static Comparator createComparator(String comparatorType, def log) {
+    switch (comparatorType) {
+        case 'inner':
+            return new InnerCompare()
+        case 'outer':
+            return new OuterCompare()
+        default:
+            log.info("$comparatorType Not valid value, use default Inner Comparator")
+            return new InnerCompare()
     }
 }

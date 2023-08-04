@@ -6,6 +6,7 @@
             "validator": "LastModified",
             "repos": ["Library", "build" ],
             "interval": 0,
+	    "intervalType": "outer",
             "dryRun": true
         },
         {
@@ -13,7 +14,8 @@
             "mode": "include",
             "validator": "LastDownloaded",
             "repos": ["tmp" ],
-            "interval": 0,
+            "interval": 1,
+	    "intervalType": "outer",
             "dryRun": true
         }
     ]
