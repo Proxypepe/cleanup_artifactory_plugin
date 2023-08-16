@@ -31,6 +31,9 @@ void scanRepositoryContentArtifact(ItemInfo artifact, ExecutionMode executionMod
         repositories.getChildren(fullArtifactRepo).each { item ->
             scanRepositoryContentArtifact(item, executionMode, validator)
         }
+        if (repositories.getChildren(fullArtifactRepo).empty) {
+            executionMode.execute(fullArtifactRepo)
+        }
     } else {
         if (validator.validate(fullArtifactRepo)) {
             executionMode.addArtifactSize(fullArtifactRepo)
@@ -83,6 +86,7 @@ void rotateRegularInclude(ExecutionMode executionMode, Validator validator, List
             log.info("Обрабатываем репозиторий: $repoKey")
             repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
                 scanRepositoryContentArtifact(item, executionMode, validator)
+//                deleteEmptyDirs(item, executionMode, validator)
             }
         }
     } catch (Exception ex) {
