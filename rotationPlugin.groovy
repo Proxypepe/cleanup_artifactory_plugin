@@ -190,6 +190,11 @@ abstract class ArtifactoryContext {
     def repositories
     long artifactsSize = 0
 
+    /**
+     * Добавляет размер артефакта к общему размеру артефактов, подготовленных к удалению.
+     *
+     * @param artifactPath Путь к артефакту в репозитории.
+     */
     void addArtifactSize(RepoPath artifactPath) {
         FileInfo fileInfo =  repositories.getFileInfo(artifactPath)
         artifactsSize += fileInfo.getSize()
@@ -222,6 +227,9 @@ abstract class ExecutionMode extends ArtifactoryContext{
      * @param repoPath путь к репозиторию артефакта для удаления
      */
     abstract void execute(RepoPath repoPath)
+    /**
+     * Выводит размер артефактов в удобочитаемом формате (байты, мегабайты или гигабайты).
+     */
     void printArtifactSize() {
         long divider = 1024 * 1024
         String type = "MB"
@@ -230,6 +238,7 @@ abstract class ExecutionMode extends ArtifactoryContext{
             divider *= 1024
             type = "GB"
         }
+        // log.info("Final size of artifacts {:.2f} in Bytes, {:.2f} in {}", artifactsSize, (artifactsSize / divider), type)
         log.info("Final size of artifacts {} in Bytes, {} in {}", artifactsSize, (artifactsSize / divider), type)
     }
 }
@@ -359,6 +368,7 @@ class OuterCompare implements Comparator {
         return first < second
     }
 }
+
 
 /**
  * Фабричный метод для создания объекта ExecutionMode. Создает объект
