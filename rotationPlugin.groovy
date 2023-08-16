@@ -3,6 +3,7 @@
 import groovy.json.JsonSlurper
 import org.artifactory.exception.CancelException
 import org.artifactory.fs.ItemInfo
+import org.artifactory.fs.FileInfo
 import org.artifactory.fs.StatsInfo
 import org.artifactory.repo.RepoPath
 import org.artifactory.repo.RepoPathFactory
@@ -32,6 +33,7 @@ void scanRepositoryContentArtifact(ItemInfo artifact, ExecutionMode executionMod
         }
     } else {
         if (validator.validate(fullArtifactRepo)) {
+            executionMode.addArtifactSize(fullArtifactRepo)
             executionMode.execute(fullArtifactRepo)
         }
     }
@@ -89,56 +91,7 @@ void rotateRegularInclude(ExecutionMode executionMode, Validator validator, List
     }
 }
 
-executions {
-    /**
-     * An execution definition.
-     * The first value is a unique name for the execution.
-     *
-     * Context variables:
-     * status (int) - a response status code. Defaults to -1 (unset). Not applicable for an async execution.
-     * message (java.lang.String) - a text message to return in the response body, replacing the response content.
-     *                              Defaults to null. Not applicable for an async execution.
-     *
-     * Plugin info annotation parameters:
-     *  version (java.lang.String) - Closure version. Optional.
-     *  description (java.lang.String) - Closure description. Optional.
-     *  httpMethod (java.lang.String, values are GET|PUT|DELETE|POST) - HTTP method this closure is going
-     *    to be invoked with. Optional (defaults to POST).
-     *  params (java.util.Map<java.lang.String, java.lang.String>) - Closure default parameters. Optional.
-     *  users (java.util.Set<java.lang.String>) - Users permitted to query this plugin for information or invoke it.
-     *  groups (java.util.Set<java.lang.String>) - Groups permitted to query this plugin for information or invoke it.
-     *
-     * Closure parameters:
-     *  params (java.util.Map) - An execution takes a read-only key-value map that corresponds to the REST request
-     *    parameter 'params'. Each entry in the map contains an array of values. This is the default closure parameter,
-     *    and so if not named it will be "it" in groovy.
-     *  ResourceStreamHandle body - Enables you to access the full input stream of the request body.
-     *    This will be considered only if the type ResourceStreamHandle is declared in the closure.
-     */
-
-    rotateRegular(
-            version: '1',
-            description: 'description',
-            httpMethod: 'POST',
-            users: [],
-            groups: [],
-            params: [:]) { params, ResourceStreamHandle body ->
-        log.debug('Start')
-        assert body
-        def json = new JsonSlurper().parse(new InputStreamReader(body.inputStream))
-        log.debug("$json.dryRun")
-        log.debug("$json.interval")
-        log.debug("$json.exclude")
-
-        executionMode = createExecutionMode(json.dryRun, repositories, log)
-        validator = new LastModifiedDayIntervalValidator(json.interval, log, repositories)
-
-        rotateRegularExclude(executionMode, validator, json.exclude)
-    }
-}
-
 def configFile = new File(ctx.artifactoryHome.etcDir, CONFIG_FILE_PATH)
-
 
 private void validateConfigObject(Object json) {
     String message = ''
@@ -216,6 +169,7 @@ if (configFile.exists()) {
                         rotateRegularExclude(executionMode, validator, repos)
                         break
                 }
+                executionMode.printArtifactSize()
             }
         }
         count++
@@ -234,6 +188,12 @@ if (configFile.exists()) {
 abstract class ArtifactoryContext {
     def log
     def repositories
+    long artifactsSize = 0
+
+    void addArtifactSize(RepoPath artifactPath) {
+        FileInfo fileInfo =  repositories.getFileInfo(artifactPath)
+        artifactsSize += fileInfo.getSize()
+    }
 }
 
 /**
@@ -255,14 +215,23 @@ abstract class Validator extends ArtifactoryContext {
 /**
  * Интерфейс, отвечающий за выполнение удаления артефакта
  */
-interface ExecutionMode {
+abstract class ExecutionMode extends ArtifactoryContext{
     /**
      * Метод выполнения. Принимает RepoPath в качестве параметра и выполняет удаление артефакта
      *
      * @param repoPath путь к репозиторию артефакта для удаления
      */
-    void execute(RepoPath repoPath)
-
+    abstract void execute(RepoPath repoPath)
+    void printArtifactSize() {
+        long divider = 1024 * 1024
+        String type = "MB"
+        double tmp = artifactsSize / divider
+        if (tmp > 1024.0) {
+            divider *= 1024
+            type = "GB"
+        }
+        log.info("Final size of artifacts {} in Bytes, {} in {}", artifactsSize, (artifactsSize / divider), type)
+    }
 }
 
 /**
@@ -324,7 +293,7 @@ class LastDownloadedIntervalValidator extends Validator {
 /**
  * Класс, отвечающий за режим "сухого прогона" удаления
  */
-class DryExecutionMode extends ArtifactoryContext implements ExecutionMode {
+class DryExecutionMode extends ExecutionMode {
     /**
      * Создаёт новый объект DryExecutionMode.
      *
@@ -345,7 +314,7 @@ class DryExecutionMode extends ArtifactoryContext implements ExecutionMode {
 /**
  * Класс, отвечающий за режим фактического удаления
  */
-class DeleteExecutionMode extends ArtifactoryContext implements ExecutionMode {
+class DeleteExecutionMode extends ExecutionMode {
     /**
      * Создаёт новый объект DeleteExecutionMode.
      *
@@ -434,8 +403,8 @@ static Validator createValidator(String validatorType, Long interval, Comparator
 
 /**
  * Фабричный метод для создания экземпляра Comparator.
- * В зависимости от переданного типа (строки 'inner' или 'outer'), создаётся экземпляр 
- * соответствующего класса. Если передан неизвестный тип, метод выводит сообщение об ошибке 
+ * В зависимости от переданного типа (строки 'inner' или 'outer'), создаётся экземпляр
+ * соответствующего класса. Если передан неизвестный тип, метод выводит сообщение об ошибке
  * и возвращает экземпляр класса InnerCompare по умолчанию.
  *
  * @param comparatorType строка, определяющая тип сравнивателя ('inner' или 'outer').
