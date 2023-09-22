@@ -52,15 +52,24 @@ void scanRepositoryContentArtifact(ItemInfo artifact, ExecutionMode executionMod
  * @param validator объект Validator, используемый для валидации артефакта.
  * @param exclude список имен репозиториев, которые следует исключить из обхода.
  * */
-void rotateRegularExclude(ExecutionMode executionMode, Validator validator, List<String> exclude) {
+void rotateRegularExclude(ExecutionMode executionMode, Validator validator, SkipObject excludeObjects) {
     try {
         repositories.getLocalRepositories().each { repoKey ->
-            if (exclude.contains(repoKey)) {
+            if (excludeObjects.repos.contains(repoKey)) {
                 log.info("Skipped repositories: $repoKey")
                 return
             }
+
             log.info("Processing the repository: $repoKey")
             repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
+                if (
+                        item.isFolder()
+                        && excludeObjects.directories.containsKey(repoKey)
+                        && excludeObjects.directories[repoKey]?.contains(item.getName())
+                ) {
+                    log.info("Skipped directory {}", item.getName())
+                    return
+                }
                 scanRepositoryContentArtifact(item, executionMode, validator)
             }
         }
@@ -83,10 +92,9 @@ void rotateRegularExclude(ExecutionMode executionMode, Validator validator, List
 void rotateRegularInclude(ExecutionMode executionMode, Validator validator, List<String> include) {
     try {
         include.each { repoKey ->
-            log.info("Обрабатываем репозиторий: $repoKey")
+            log.info("Processing the repository: $repoKey")
             repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
                 scanRepositoryContentArtifact(item, executionMode, validator)
-//                deleteEmptyDirs(item, executionMode, validator)
             }
         }
     } catch (Exception ex) {
@@ -151,17 +159,20 @@ if (configFile.exists()) {
     def count = 1
     config.policies.each { policySettings ->
         validateConfigObject(policySettings)
-        def cron = policySettings.containsKey('cron') ? policySettings.cron as String : ["0 0 5 ? * 1"]
-        def mode = policySettings.containsKey('mode') ? policySettings.mode as String : "include"
-        def validatorType = policySettings.containsKey('validator') ? policySettings.validator as String : "LastModified"
-        def interval = policySettings.containsKey('interval') ? policySettings.interval as Long : DEFAULT_TIME_INTERVAL
-        def intervalType = policySettings.containsKey('intervalType') ? policySettings.intervalType as String : "inner"
-        def dryRun = policySettings.containsKey('dryRun') ? new Boolean(policySettings.dryRun) : true
-        def repos = policySettings.containsKey('repos') ? policySettings.repos as List<String> : []
+        String cron = policySettings.containsKey('cron') ? policySettings.cron as String : "0 0 5 ? * 1"
+        String mode = policySettings.containsKey('mode') ? policySettings.mode as String : "include"
+        String validatorType = policySettings.containsKey('validator') ? policySettings.validator as String : "LastModified"
+        Long interval = policySettings.containsKey('interval') ? policySettings.interval as Long : DEFAULT_TIME_INTERVAL
+        String intervalType = policySettings.containsKey('intervalType') ? policySettings.intervalType as String : "outer"
+        Boolean dryRun = policySettings.containsKey('dryRun') ? new Boolean(policySettings.dryRun) : true
+        List<String> repos = policySettings.containsKey('repos') ? policySettings.repos as List<String> : []
+        Map<String, List<String>> directories = policySettings.containsKey('directories') ? policySettings.directories as Map : [:]
+        SkipObject objects = new SkipObject(repos, directories)
 
         jobs {
             "scheduledCleanup_$count"(cron: cron) {
-                log.info "Policy settings for scheduled run at($cron): Skiped repos list($repos), timeInterval($interval), exec ($dryRun)"
+                log.info("objects {}", directories)
+                log.info "Policy settings for scheduled run at($cron): repos list($repos), timeInterval($interval), exec ($dryRun), mode($mode)"
                 def executionMode = createExecutionMode(dryRun, repositories, log)
                 def comparator = createComparator(intervalType, log)
                 def validator = createValidator(validatorType, interval, comparator, repositories, log)
@@ -170,7 +181,7 @@ if (configFile.exists()) {
                         rotateRegularInclude(executionMode, validator, repos)
                         break
                     case 'exclude':
-                        rotateRegularExclude(executionMode, validator, repos)
+                        rotateRegularExclude(executionMode, validator, objects)
                         break
                 }
                 executionMode.printArtifactSize()
@@ -200,7 +211,7 @@ abstract class ArtifactoryContext {
      * @param artifactPath Путь к артефакту в репозитории.
      */
     void addArtifactSize(RepoPath artifactPath) {
-        FileInfo fileInfo =  repositories.getFileInfo(artifactPath)
+        FileInfo fileInfo = repositories.getFileInfo(artifactPath)
         artifactsSize += fileInfo.getSize()
     }
 }
@@ -224,7 +235,7 @@ abstract class Validator extends ArtifactoryContext {
 /**
  * Интерфейс, отвечающий за выполнение удаления артефакта
  */
-abstract class ExecutionMode extends ArtifactoryContext{
+abstract class ExecutionMode extends ArtifactoryContext {
     /**
      * Метод выполнения. Принимает RepoPath в качестве параметра и выполняет удаление артефакта
      *
@@ -306,7 +317,7 @@ class LastDownloadedIntervalValidator extends Validator {
 /**
  * Класс, отвечающий за режим "сухого прогона" удаления
  */
-class DryExecutionMode extends ExecutionMode {
+final class DryExecutionMode extends ExecutionMode {
     /**
      * Создаёт новый объект DryExecutionMode.
      *
@@ -327,7 +338,7 @@ class DryExecutionMode extends ExecutionMode {
 /**
  * Класс, отвечающий за режим фактического удаления
  */
-class DeleteExecutionMode extends ExecutionMode {
+final class DeleteExecutionMode extends ExecutionMode {
     /**
      * Создаёт новый объект DeleteExecutionMode.
      *
@@ -357,7 +368,7 @@ interface Comparator {
  * Класс InnerCompare реализует интерфейс Comparator. Метод compare возвращает true,
  * если первое число больше второго.
  **/
-class InnerCompare implements Comparator {
+final class InnerCompare implements Comparator {
     Boolean compare(Long first, Long second) {
         return first > second
     }
@@ -367,9 +378,23 @@ class InnerCompare implements Comparator {
  * Класс OuterCompare реализует интерфейс Comparator. Метод compare возвращает true,
  * если первое число меньше второго.
  **/
-class OuterCompare implements Comparator {
+final class OuterCompare implements Comparator {
     Boolean compare(Long first, Long second) {
         return first < second
+    }
+}
+
+/**
+ *
+ *
+ **/
+class SkipObject {
+    List<String> repos
+    Map<String, List<String>> directories
+
+    SkipObject(List<String> repos, Map<String, List<String>> directories) {
+        this.repos = repos
+        this.directories = directories
     }
 }
 
@@ -424,7 +449,7 @@ static Validator createValidator(String validatorType, Long interval, Comparator
  * @param comparatorType строка, определяющая тип сравнивателя ('inner' или 'outer').
  * @param log объект для логирования сообщений.
  * @return экземпляр класса, реализующего интерфейс Comparator.
- **/
+ * */
 static Comparator createComparator(String comparatorType, def log) {
     switch (comparatorType) {
         case 'inner':

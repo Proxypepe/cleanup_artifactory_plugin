@@ -1,0 +1,26 @@
+### Groovy template
+# .gitignore created from Groovy contributors in https://github.com/apache/groovy/blob/master/.gitignore
+
+user.gradle
+.gradle/
+target/
+build/
+out/
+lib/
+*.DS_Store
+*.class
+*.swp
+*~
+
+.idea
+*.iml
+*.ipr
+*.iws
+.shelf
+
+.settings/
+.classpath
+.project
+bin/
+
+
