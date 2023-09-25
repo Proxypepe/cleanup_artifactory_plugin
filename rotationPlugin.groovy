@@ -64,8 +64,8 @@ void rotateRegularExclude(ExecutionMode executionMode, Validator validator, Skip
             repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
                 if (
                         item.isFolder()
-                        && excludeObjects.directories.containsKey(repoKey)
-                        && excludeObjects.directories[repoKey]?.contains(item.getName())
+                                && excludeObjects.directories.containsKey(repoKey)
+                                && excludeObjects.directories[repoKey]?.contains(item.getName())
                 ) {
                     log.info("Skipped directory {}", item.getName())
                     return
