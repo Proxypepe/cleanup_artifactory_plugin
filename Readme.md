@@ -40,10 +40,25 @@ chomod +x setup.sh
 ### Логирование
 
 Для вывода сообщений в логи необходимо дополнить следующий файл: ${ARTIFACTORY_HOME}/etc/artifactory/logback.xml
+
 ```xml
-    <logger name="rotationPlugin">
-        <level value="info"/>
-    </logger>
+<logger name="rotationPlugin" additivity="false">
+    <appender-ref ref="ROTATION"/>
+    <level value="debug"/>
+</logger>
+
+<appender name="ROTATION" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <File>${log.dir}/rotation-plugin.log</File>
+    <encoder>
+        <pattern>%date -- %m%n</pattern>
+    </encoder>
+    <rollingPolicy class="org.jfrog.common.logging.logback.rolling.FixedWindowWithDateRollingPolicy">
+        <FileNamePattern>${log.dir.archived}/rotation-plugin.%i.log.gz</FileNamePattern>
+    </rollingPolicy>
+    <triggeringPolicy class="org.jfrog.common.logging.logback.triggering.SizeAndIntervalTriggeringPolicy">
+        <MaxFileSize>250MB</MaxFileSize>
+    </triggeringPolicy>
+</appender>
 ```
 
 
