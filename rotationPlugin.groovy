@@ -20,24 +20,25 @@ import groovy.transform.Field
  * применяется валидатор для проверки его состояния. Если валидация проходит успешно,
  * выполняется действие, определенное в режиме исполнения.
  *
- * @param artifact объект ItemInfo, представляющий артефакт для сканирования.
+ * @param artefact объект ItemInfo, представляющий артефакт для сканирования.
  * @param executionMode объект ExecutionMode, определяющий действие, которое следует выполнить с артефактом,
  *                      в случае прохождения валидации.
  * @param validator объект Validator, используемый для валидации артефакта.
  * */
-void scanRepositoryContentArtifact(ItemInfo artifact, ExecutionMode executionMode, Validator validator) {
-    RepoPath fullArtifactRepo = RepoPathFactory.create(artifact.getRepoKey(), artifact.getRelPath())
-    if (artifact.isFolder()) {
-        repositories.getChildren(fullArtifactRepo).each { item ->
-            scanRepositoryContentArtifact(item, executionMode, validator)
+void scanRepositoryContentArtefact(ItemInfo artefact, ExecutionMode executionMode, Validator validator) {
+    RepoPath fullArtefactRepo = RepoPathFactory.create(artefact.getRepoKey(), artefact.getRelPath())
+    if (artefact.isFolder()) {
+        repositories.getChildren(fullArtefactRepo).each { item ->
+            scanRepositoryContentArtefact(item, executionMode, validator)
         }
-        if (repositories.getChildren(fullArtifactRepo).empty) {
-            executionMode.execute(fullArtifactRepo)
+        if (repositories.getChildren(fullArtefactRepo).empty) {
+            executionMode.execute(fullArtefactRepo)
         }
     } else {
-        if (validator.validate(fullArtifactRepo)) {
-            executionMode.addArtifactSize(fullArtifactRepo)
-            executionMode.execute(fullArtifactRepo)
+        if (validator.validate(fullArtefactRepo)) {
+            executionMode.printArtefactStatistic(fullArtefactRepo)
+            executionMode.addArtefactSize(fullArtefactRepo)
+            executionMode.execute(fullArtefactRepo)
         }
     }
 }
@@ -70,7 +71,7 @@ void rotateRegularExclude(ExecutionMode executionMode, Validator validator, Skip
                     log.info("Skipped directory {}", item.getName())
                     return
                 }
-                scanRepositoryContentArtifact(item, executionMode, validator)
+                scanRepositoryContentArtefact(item, executionMode, validator)
             }
         }
     } catch (Exception ex) {
@@ -94,7 +95,7 @@ void rotateRegularInclude(ExecutionMode executionMode, Validator validator, List
         include.each { repoKey ->
             log.info("Processing the repository: $repoKey")
             repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
-                scanRepositoryContentArtifact(item, executionMode, validator)
+                scanRepositoryContentArtefact(item, executionMode, validator)
             }
         }
     } catch (Exception ex) {
@@ -131,8 +132,8 @@ private void validateConfigObject(Object json) {
         throw new IllegalArgumentException(message)
     }
 
-    if (!(json.intervalType in ['inner', 'outer'])) {
-        message = "Comparator can only be 'inner' or 'outer'"
+    if (!(json.intervalType in ['inner', 'outer', 'all', 'none'])) {
+        message = "Comparator can only be 'inner', 'outer', 'all', 'none'"
         log.error(message)
         throw new IllegalArgumentException(message)
     }
@@ -184,7 +185,7 @@ if (configFile.exists()) {
                         rotateRegularExclude(executionMode, validator, objects)
                         break
                 }
-                executionMode.printArtifactSize()
+                executionMode.printArtefactSize()
             }
         }
         count++
@@ -194,32 +195,32 @@ if (configFile.exists()) {
 }
 
 /**
- * Абстрактный класс ArtifactoryContext, представляющий контекст выполнения в Artifactory.
+ * Абстрактный класс ArtefactoryContext, представляющий контекст выполнения в Artefactory.
  * Содержит ссылки на системные объекты, необходимые для выполнения операций с репозиториями.
  *
  * @param log объект для логирования действий и ошибок.
- * @param repositories объект для взаимодействия с репозиториями в Artifactory.
+ * @param repositories объект для взаимодействия с репозиториями в Artefactory.
  */
-abstract class ArtifactoryContext {
+abstract class ArtefactoryContext {
     def log
     def repositories
-    long artifactsSize = 0
+    long artefactsSize = 0
 
     /**
      * Добавляет размер артефакта к общему размеру артефактов, подготовленных к удалению.
      *
-     * @param artifactPath Путь к артефакту в репозитории.
+     * @param artefactPath Путь к артефакту в репозитории.
      */
-    void addArtifactSize(RepoPath artifactPath) {
-        FileInfo fileInfo = repositories.getFileInfo(artifactPath)
-        artifactsSize += fileInfo.getSize()
+    void addArtefactSize(RepoPath artefactPath) {
+        FileInfo fileInfo = repositories.getFileInfo(artefactPath)
+        artefactsSize += fileInfo.getSize()
     }
 }
 
 /**
  * Абстрактный класс, отвечающий за определение того, подлежит ли артефакт удалению
  */
-abstract class Validator extends ArtifactoryContext {
+abstract class Validator extends ArtefactoryContext {
     Comparator comparator
     Long interval
     /**
@@ -235,26 +236,47 @@ abstract class Validator extends ArtifactoryContext {
 /**
  * Интерфейс, отвечающий за выполнение удаления артефакта
  */
-abstract class ExecutionMode extends ArtifactoryContext {
+abstract class ExecutionMode extends ArtefactoryContext {
     /**
      * Метод выполнения. Принимает RepoPath в качестве параметра и выполняет удаление артефакта
      *
      * @param repoPath путь к репозиторию артефакта для удаления
      */
     abstract void execute(RepoPath repoPath)
+
+
+    void printArtefactStatistic(RepoPath artefactPath) {
+        StatsInfo stats = repositories.getStats(artefactPath)
+        FileInfo fileInfo = repositories.getFileInfo(artefactPath)
+        String lastDownloaded = null
+
+        if (stats?.getLastDownloaded())
+            lastDownloaded = new Date(stats.getLastDownloaded()).format("yyyy-MM-dd HH:mm")
+
+        log.info("###FilePath@{};FileName@{};RepoKey@{};FileSize@{};stats@{};Created@{};LastModified@{}",
+                artefactPath,
+                fileInfo.getName(),
+                fileInfo.getRepoKey(),
+                fileInfo.getSize(),
+                lastDownloaded,
+                new Date(fileInfo.getCreated()).format("yyyy-MM-dd HH:mm"),
+                new Date(fileInfo.getLastModified()).format("yyyy-MM-dd HH:mm")
+        )
+    }
+
     /**
      * Выводит размер артефактов в удобочитаемом формате (байты, мегабайты или гигабайты).
      */
-    void printArtifactSize() {
+    void printArtefactSize() {
         long divider = 1024 * 1024
         String type = "MB"
-        double tmp = artifactsSize / divider
+        double tmp = artefactsSize / divider
         if (tmp > 1024.0) {
             divider *= 1024
             type = "GB"
         }
-        // log.info("Final size of artifacts {:.2f} in Bytes, {:.2f} in {}", artifactsSize, (artifactsSize / divider), type)
-        log.info("Final size of artifacts {} in Bytes, {} in {}", artifactsSize, (artifactsSize / divider), type)
+        // log.info("Final size of artefacts {:.2f} in Bytes, {:.2f} in {}", artefactsSize, (artefactsSize / divider), type)
+        log.info("Final size of artefacts {} in Bytes, {} in {}", artefactsSize, (artefactsSize / divider), type)
     }
 }
 
@@ -330,7 +352,7 @@ final class DryExecutionMode extends ExecutionMode {
     }
 
     void execute(RepoPath repoPath) {
-        log.info('Artifact would be removed: {}', repoPath.toPath())
+        log.info('Artefact would be removed: {}', repoPath.toPath())
     }
 
 }
@@ -352,7 +374,7 @@ final class DeleteExecutionMode extends ExecutionMode {
 
     void execute(RepoPath repoPath) {
         repositories.delete(repoPath)
-        log.info('Artifact has been removed: {}', repoPath.toPath())
+        log.info('Artefact has been removed: {}', repoPath.toPath())
     }
 
 }
@@ -381,6 +403,26 @@ final class InnerCompare implements Comparator {
 final class OuterCompare implements Comparator {
     Boolean compare(Long first, Long second) {
         return first < second
+    }
+}
+
+/**
+ *
+ *
+ **/
+final class TrueCompare implements Comparator {
+    Boolean compare(Long first, Long second) {
+        return true
+    }
+}
+
+/**
+ *
+ *
+ **/
+final class FalseCompare implements Comparator {
+    Boolean compare(Long first, Long second) {
+        return false
     }
 }
 
@@ -456,6 +498,10 @@ static Comparator createComparator(String comparatorType, def log) {
             return new InnerCompare()
         case 'outer':
             return new OuterCompare()
+        case 'all':
+            return new TrueCompare()
+        case 'none':
+            return new  FalseCompare()
         default:
             log.info("$comparatorType Not valid value, use default Inner Comparator")
             return new InnerCompare()
