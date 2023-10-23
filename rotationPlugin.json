@@ -29,6 +29,17 @@
       "interval": 1,
       "intervalType": "outer",
       "dryRun": true
+    },
+    {
+      "cron": "0 * * ? * *",
+      "mode": "docker",
+      "validator": "LastDownloaded",
+      "repos": [
+        "docker-prod"
+      ],
+      "interval": 0,
+      "intervalType": "outer",
+      "dryRun": true
     }
   ]
 }

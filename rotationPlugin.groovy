@@ -43,6 +43,41 @@ void scanRepositoryContentArtefact(ItemInfo artefact, ExecutionMode executionMod
     }
 }
 
+void scanDockerRepository(ItemInfo artefact, RepoPath parentPath, Map<RepoPath, Boolean> map, ExecutionMode executionMode, Validator validator) {
+    RepoPath fullArtefactRepo = RepoPathFactory.create(artefact.getRepoKey(), artefact.getRelPath())
+    if (artefact.isFolder()) {
+        repositories.getChildren(fullArtefactRepo).each { item ->
+            scanDockerRepository(item, fullArtefactRepo, map, executionMode, validator)
+        }
+    } else {
+        if (map[parentPath] == null) {
+            map[parentPath] = true
+        }
+        map[parentPath] &= validator.validate(fullArtefactRepo)
+    }
+}
+
+void rotateRegularDocker(ExecutionMode executionMode, Validator validator, SkipObject excludeObjects) {
+    Map<RepoPath, Boolean> map = [:]
+    try {
+        excludeObjects.repos.each { repoKey ->
+            log.info("Processing the repository: $repoKey")
+            repositories.getChildren(RepoPathFactory.create(repoKey)).each { item ->
+                scanDockerRepository(item, RepoPathFactory.create(repoKey), map, executionMode, validator)
+            }
+        }
+    } catch (Exception ex) {
+        log.info('Error message {}', ex.getMessage())
+        log.info('Error stack trace {}', ex.getStackTrace())
+    }
+    log.info(map.toString())
+
+    map.each { it ->
+        if (it.value && !it.key.toString().contains(".jfrog"))
+            executionMode.execute(it.key)
+    }
+}
+
 /**
  * Обходит все локальные репозитории, исключая те, что указаны в списке исключений.
  * Для каждого артефакта в репозитории вызывается функция сканирования содержимого с переданными
@@ -114,7 +149,7 @@ private void validateConfigObject(Object json) {
         throw new IllegalArgumentException(message)
     }
 
-    if (!(json.mode in ['exclude', 'include'])) {
+    if (!(json.mode in ['exclude', 'include', 'docker'])) {
         message = "mode can only be 'exclude' or 'include'"
         log.error(message)
         throw new IllegalArgumentException(message)
@@ -183,6 +218,9 @@ if (configFile.exists()) {
                         break
                     case 'exclude':
                         rotateRegularExclude(executionMode, validator, objects)
+                        break
+                    case 'docker':
+                        rotateRegularDocker(executionMode, validator, objects)
                         break
                 }
                 executionMode.printArtefactSize()
@@ -501,7 +539,7 @@ static Comparator createComparator(String comparatorType, def log) {
         case 'all':
             return new TrueCompare()
         case 'none':
-            return new  FalseCompare()
+            return new FalseCompare()
         default:
             log.info("$comparatorType Not valid value, use default Inner Comparator")
             return new InnerCompare()
